@@ -74,7 +74,7 @@ def capture(db, lot_id, data, actor):
 def add_mark(db, lot_id, data, actor):
     lot = lot_row(db, lot_id, lock=True)
     measure = latest_measure(db, lot_id)
-    if not measure or lot['state'] not in ('blocked', 'measured', 'review'):
+    if not measure or lot['state'] not in ('blocked', 'measured', 'review', 'blind'):
         raise HTTPException(409, '当前工序无法标记缺陷')
     row = db.execute('''INSERT INTO defect_mark(measure_id,kind,zone,x_pct,y_pct,note,created_by)
                          VALUES (%(measure_id)s,%(kind)s,%(zone)s,%(x_pct)s,%(y_pct)s,%(note)s,%(actor)s) RETURNING *''',
@@ -86,7 +86,7 @@ def add_mark(db, lot_id, data, actor):
 def review_mark(db, lot_id, mark_id, data, actor):
     lot = lot_row(db, lot_id, lock=True)
     measure = latest_measure(db, lot_id)
-    if not measure or lot['state'] not in ('blocked', 'measured', 'review'):
+    if not measure or lot['state'] not in ('blocked', 'measured', 'review', 'blind'):
         raise HTTPException(409, '当前工序无法复核缺陷')
     row = db.execute('''UPDATE defect_mark SET state=%s,review_note=%s,reviewed_by=%s,reviewed_at=now()
                          WHERE id=%s AND measure_id=%s AND state='open' RETURNING *''',

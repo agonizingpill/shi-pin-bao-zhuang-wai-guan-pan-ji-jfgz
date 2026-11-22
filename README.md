@@ -25,7 +25,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 | 账号 | 岗位 | 使用页面和权限 |
 |---|---|---|
 | `operator` | 线边操作员 | 登记批次、归档同机台样本、标记缺陷、提交判级、按返工单领料 |
-| `supervisor` | 质检主管 | 查询批次、确认或驳回缺陷、签核等级、登记返工复测、关闭批次 |
+| `supervisor` | 质检主管 | 查询批次、确认或驳回缺陷、签核等级、盲审投票、登记返工复测、关闭批次 |
+| `supervisor2` | 质检主管 | 同 `supervisor`，盲审第二票 |
+| `supervisor3` | 质检主管 | 同 `supervisor`，盲审分歧裁决 |
 | `viewer` | 排产查看 | 查询批次、样本与模型凭证、返工和交接履历 |
 
 ## 一班交接剧本
@@ -39,13 +41,16 @@ docker compose exec -T backend python -m scripts.seed_demo
 | 09:10 | 主管查看 `PK-261121-05-S01` 山椒豌豆的 B 级建议，以及上封口 x=67%、y=18% 的待复核压痕。确认或驳回后才能签核。 |
 | 09:20 | `PK-261121-04-S01` 黑芝麻薄脆模型为 A。主管根据实物封口折边改判 B，记录理由，自动签出 160 件 `FILM-GL-180` 返工需求。 |
 | 09:28 | 操作员在 A-12 对 `PK-261121-04` 确认领料。初始 360 件扣至 200 件，重复确认会被拦截。 |
+| 09:40 | `PK-261121-06` 蜜桃乌龙酥模型建议 B 级，最高两档分差 0.19，批次进入双主管盲审。`supervisor` 已独立登记一票。 |
+| 09:55 | `supervisor2` 打开同一批次，只能看到「已登记 1/2 票」，看不到第一票内容，独立填写等级与返工件数。两票一致即定案并生成领料单；分歧时由 `supervisor3` 一票裁决。 |
 | 10:05 | 主管在 `PK-261121-04-R01` 登记同机台五通道复测，替换件数填写 160。举例可填褶皱 0.32%、偏位 0.19 mm、色差 0.83 ΔE、间隙 0.14 mm、光泽波动 1.9%。复测签核后关闭并交接排产。 |
 
-五个初始批次对应这份剧本。启动时保留一张待采批次、一张缺通道批次、一张待签核批次、一张改判待领料批次和一张已关闭批次。表中时间为模拟班次的操作顺序，界面显示实际归档与签核时间（Asia/Shanghai）。
+六个初始批次对应这份剧本。启动时保留一张待采批次、一张缺通道批次、一张待签核批次、一张改判待领料批次、一张盲审中批次和一张已关闭批次。表中时间为模拟班次的操作顺序，界面显示实际归档与签核时间（Asia/Shanghai）。
 
 ## 状态与数据规则
 
-- 批次按 `new → blocked/measured → queued → review → rework/approved → closed` 推进。缺通道只能补采，判级失败回到 `measured`，可重新提交。批次由主管关闭。
+- 批次按 `new → blocked/measured → queued → review/blind → rework/approved → closed` 推进。缺通道只能补采，判级失败回到 `measured`，可重新提交。批次由主管关闭。
+- 模型最高两档分数相差不足 0.2 时，批次不进单人签核，改进工作台双主管盲审：两位主管各自独立填写等级与返工件数，两项都相同才定案；有分歧由未投过票的第三位主管一票裁决。定案前任何人只能看到投票进度，看不到他人选择；定案后全部票型公开。改判与非 A 级照旧记录理由与返工件数。断线重试不重复记票，两位主管同时提交也只出一份终判，需要返工时只生成一张领料单。
 - 测量版本不可覆盖，保存新版本时链接旧样本。所有通道有单位、边界和输入校验。缺陷标记绑定特定样本和包装面坐标，主管需要为确认或驳回附说明。当前样本的未复核缺陷会拦截等级签核。
 - A 同判可以直接进入待关闭。任何改判和任何非 A 级签核都要求记录原因和有效返工件数，在签核事务里生成一张领料单。保留模型原判、人工终判和签核人。
 - 返工单按 `requested → issued → verified` 推进。领料扣减对应 SKU，库存不足保持待领料。换膜件数必须等于领料件数，且用绑定机台登记五通道复测。外观复测上限分别为褶皱 1%、偏位 0.5 mm、色差 2 ΔE、封口间隙 0.35 mm、光泽波动 4%。失败记录进入履历，批次继续等待复测。
@@ -61,8 +66,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 | 位置 | 职责 |
 |---|---|
 | `backend/migrations/001_workcell.sql` | 批次、测量版本、缺陷、判级、领料单、库存和履历的 SQL 结构与约束 |
+| `backend/migrations/002_blind_review.sql` | 盲审状态扩展与盲审票结构，按文件名顺序迁移 |
 | `backend/src/inspection.py` | 成批登记、采样版本、缺陷定位和复核前置条件 |
-| `backend/src/disposition.py` | 人工签核、领料并发保护、复测和关闭 |
+| `backend/src/blind.py`、`disposition.py` | 双主管盲审投票与裁决、人工签核、领料并发保护、复测和关闭 |
 | `backend/src/model.py`、`queue.py`、`worker.py` | 可复现线性模型和异步任务 |
 | `backend/src/api.py`、`auth.py` | FastAPI 路由、JWT、权限、访问日志与请求编号 |
 | `frontend/src/pages/` | 批次台账、判级工作台、返工领料，登录及路由在 `app.js` |
@@ -70,7 +76,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 `.env` 可设置 `COMPOSE_PROJECT_NAME`、`FRONTEND_PORT`、`BACKEND_PORT`、`DB_PORT`、`POSTGRES_PASSWORD`、`JWT_SECRET` 和 `SEED_DEMO`。Compose 使用 Nginx 1.27、Python 3.12 + FastAPI、scikit-learn 1.6.1、PostgreSQL 16 和 Redis 7。五个服务各有健康检查，Nginx 将 `/api/` 转发给 API。
 
-岗位、等级、机台、缺陷类型、包装面和缺陷复核态出现在 `migrations/001_workcell.sql`、`backend/src/schemas.py` 和 `frontend/src/labels.js`。批次、判级、返工状态出现在 SQL 约束、`inspection.py` / `disposition.py` / `queue.py` 和 `labels.js`。测量通道与单位由 `schemas.py`、SQL 测量列、`model.py`、`labels.js` 和 `ui.js` 共用。返工触发类型在 SQL、`disposition.py` 和 `pages/rework.js`，测量用途在 SQL、`inspection.py`、`disposition.py` 和 `pages/workbench.js`。复测上限从后端 API 返回。
+岗位、等级、机台、缺陷类型、包装面和缺陷复核态出现在 `migrations/001_workcell.sql`、`backend/src/schemas.py` 和 `frontend/src/labels.js`。批次、判级、返工与盲审状态出现在 SQL 约束、`inspection.py` / `disposition.py` / `blind.py` / `queue.py` 和 `labels.js`。测量通道与单位由 `schemas.py`、SQL 测量列、`model.py`、`labels.js` 和 `ui.js` 共用。返工触发类型在 SQL、`disposition.py` 和 `pages/rework.js`，测量用途在 SQL、`inspection.py`、`disposition.py` 和 `pages/workbench.js`。复测上限从后端 API 返回。
 
 本项目以 MIT License 提供，见 `LICENSE`。
 

@@ -4,8 +4,40 @@ from .inspection import audit, insert_measure, latest_grade, latest_measure, lot
 from .schemas import VERIFICATION_LIMITS
 
 
+def validate_review(lot, decision, data):
+    override = data.grade != decision['model_grade']
+    if (override or data.grade != 'A') and (not data.reason or not data.rework_units
+                                            or data.rework_units > lot['units']):
+        raise HTTPException(422, '改判或非 A 级必须记录理由和返工数量，数量不得超过批次总量')
+    if not override and data.grade == 'A' and data.rework_units is not None:
+        raise HTTPException(422, 'A 级同判直接放行，不领取返工膜材')
+
+
+def finalize_decision(db, lot, decision, grade, reason, rework_units, actor, action, **extra):
+    override = grade != decision['model_grade']
+    rework = override or grade != 'A'
+    trigger = 'override' if override else 'out_of_grade'
+    signed = db.execute('''UPDATE grade_decision SET state='signed',final_grade=%s,reason=%s,
+                           reviewed_by=%s,reviewed_at=now() WHERE id=%s AND state<>'signed' RETURNING *''',
+                        (grade, reason, actor, decision['id'])).fetchone()
+    if not signed:
+        raise HTTPException(409, '判级已定案，请勿重复提交')
+    audit(db, lot['id'], actor, action, model=decision['model_grade'], final=grade,
+          override=override, reason=reason, decision_id=decision['id'], **extra)
+    if rework:
+        row = db.execute('''INSERT INTO rework_issue(lot_id,decision_id,sku,required_units,reason,trigger)
+                            VALUES (%s,%s,%s,%s,%s,%s) RETURNING *''',
+                         (lot['id'], decision['id'], lot['film_sku'], rework_units, reason, trigger)).fetchone()
+        audit(db, lot['id'], actor, 'rework_requested', issue_id=row['id'], sku=row['sku'],
+              quantity=row['required_units'], trigger=trigger)
+    set_state(db, lot, 'rework' if rework else 'approved')
+    return signed
+
+
 def sign_grade(db, lot_id, data, actor):
     lot = lot_row(db, lot_id, lock=True)
+    if lot['state'] == 'blind':
+        raise HTTPException(409, '批次在双主管盲审中，请登记盲审票')
     if lot['state'] != 'review':
         raise HTTPException(409, '需要等待模型判级完成')
     measure = latest_measure(db, lot_id)
@@ -14,26 +46,8 @@ def sign_grade(db, lot_id, data, actor):
         raise HTTPException(409, '没有可签核的模型判级')
     if db.execute("SELECT 1 FROM defect_mark WHERE measure_id=%s AND state='open'", (measure['id'],)).fetchone():
         raise HTTPException(409, '当前样本还有待复核的缺陷标记')
-    override = data.grade != decision['model_grade']
-    rework = override or data.grade != 'A'
-    trigger = 'override' if override else 'out_of_grade'
-    if rework and (not data.reason or not data.rework_units or data.rework_units > lot['units']):
-        raise HTTPException(422, '改判或非 A 级必须记录理由和返工数量，数量不得超过批次总量')
-    if not rework and data.rework_units is not None:
-        raise HTTPException(422, 'A 级同判直接放行，不领取返工膜材')
-    signed = db.execute('''UPDATE grade_decision SET state='signed',final_grade=%s,reason=%s,
-                           reviewed_by=%s,reviewed_at=now() WHERE id=%s RETURNING *''',
-                        (data.grade, data.reason, actor, decision['id'])).fetchone()
-    audit(db, lot_id, actor, 'grade_signed', model=decision['model_grade'], final=data.grade,
-          override=override, reason=data.reason, decision_id=decision['id'])
-    if rework:
-        row = db.execute('''INSERT INTO rework_issue(lot_id,decision_id,sku,required_units,reason,trigger)
-                            VALUES (%s,%s,%s,%s,%s,%s) RETURNING *''',
-                         (lot_id, decision['id'], lot['film_sku'], data.rework_units, data.reason, trigger)).fetchone()
-        audit(db, lot_id, actor, 'rework_requested', issue_id=row['id'], sku=row['sku'],
-              quantity=row['required_units'], trigger=trigger)
-    set_state(db, lot, 'rework' if rework else 'approved')
-    return signed
+    validate_review(lot, decision, data)
+    return finalize_decision(db, lot, decision, data.grade, data.reason, data.rework_units, actor, 'grade_signed')
 
 
 def issue_row(db, lot_id, expected):

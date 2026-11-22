@@ -26,7 +26,7 @@ function navigate(href, replace = false) {
 
 function loginScreen() {
   return `<main class="login-layout"><section class="login-visual"><div class="login-brand">${brand()}</div><div class="login-graphic"><div class="print-frame"><div class="reg-corner"></div><div class="print-bag"><span>禾 堤</span><i></i><strong>海盐燕麦</strong><b>脆片</b><span>SEA SALT / 120 G</span></div><div class="print-scale"><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span></div></div></div><div class="login-foot"><span>品控中心 / 包装产线</span><span>VISION CELL 01—03</span></div></section>
-    <section class="login-side"><div class="login-content"><p class="eyebrow">禾堤食品 / 车间系统</p><h1>包装外观<br>质检台</h1><p class="lede">登录当班岗位，接手包装批次。</p><form id="login-form"><label>岗位账号<input name="username" autocomplete="username" placeholder="输入岗位账号" required></label><label>口令<input name="password" type="password" autocomplete="current-password" placeholder="输入口令" required></label><button class="primary">登录工作台 <span>→</span></button><p id="login-error" role="alert"></p></form><div class="demo-login"><span>演示岗位</span>${Object.entries(ROLES).map(([key,label])=>`<button type="button" data-demo="${key}">${label}</button>`).join('')}</div></div></section></main>`;
+    <section class="login-side"><div class="login-content"><p class="eyebrow">禾堤食品 / 车间系统</p><h1>包装外观<br>质检台</h1><p class="lede">登录当班岗位，接手包装批次。</p><form id="login-form"><label>岗位账号<input name="username" autocomplete="username" placeholder="输入岗位账号" required></label><label>口令<input name="password" type="password" autocomplete="current-password" placeholder="输入口令" required></label><button class="primary">登录工作台 <span>→</span></button><p id="login-error" role="alert"></p></form><div class="demo-login"><span>演示岗位</span>${Object.entries(ROLES).map(([key,label])=>`<button type="button" data-demo="${key}">${label}</button>`).join('')}<button type="button" data-demo="supervisor2">质检主管 2</button><button type="button" data-demo="supervisor3">质检主管 3</button></div></div></section></main>`;
 }
 
 function render() {
@@ -63,7 +63,8 @@ async function load(quiet = false) {
     const selected = route.id ? eligible.find(lot => lot.id === route.id) : eligible[0];
     const detail = route.page !== 'lots' && selected ? await api.detail(selected.id) : null;
     if (tick !== revision) return;
-    const changed = !quiet || store.detail?.lot.state !== detail?.lot.state || store.detail?.lot.id !== detail?.lot.id;
+    const changed = !quiet || store.detail?.lot.state !== detail?.lot.state || store.detail?.lot.id !== detail?.lot.id
+      || JSON.stringify(store.detail?.blind) !== JSON.stringify(detail?.blind);
     const changedLot = store.detail?.lot.id !== detail?.lot.id;
     Object.assign(store,{lots,materials,detail,loading:false,error:''});
     if (changedLot) {
@@ -71,7 +72,7 @@ async function load(quiet = false) {
       store.zone = live?.zone || 'front';
     }
     if (changed) render();
-    if (detail?.lot.state === 'queued') poll = setTimeout(() => load(true), 1000);
+    if (detail?.lot.state === 'queued' || detail?.lot.state === 'blind') poll = setTimeout(() => load(true), 1000);
   } catch (error) {
     if (tick !== revision) return;
     Object.assign(store,{loading:false,error:error.message});
@@ -97,7 +98,7 @@ function serialize(form, submitter) {
   }));
 }
 
-const success = {measurements:'测量归档成功', marks:'缺陷已标记', grade:'判级已提交', 'grade/review':'等级已签核', 'rework/issue':'领料已过账', 'rework/verify':'复测已签核', close:'批次已关闭'};
+const success = {measurements:'测量归档成功', marks:'缺陷已标记', grade:'判级已提交', 'grade/review':'等级已签核', 'blind/vote':'盲审票已登记', 'rework/issue':'领料已过账', 'rework/verify':'复测已签核', close:'批次已关闭'};
 async function perform(action, button, payload) {
   if (button) button.disabled = true;
   try {

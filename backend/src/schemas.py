@@ -102,3 +102,5 @@ class Verification(MeasureInput):
 
 CHANNELS = ('wrinkle_pct', 'offset_mm', 'delta_e', 'seal_gap_mm', 'gloss_cv')
 VERIFICATION_LIMITS = dict(zip(CHANNELS, (1.0, 0.5, 2.0, 0.35, 4.0), strict=True))
+# 模型最高两档分数差低于此值时，批次进入双主管盲审
+BLIND_REVIEW_MARGIN = 0.2

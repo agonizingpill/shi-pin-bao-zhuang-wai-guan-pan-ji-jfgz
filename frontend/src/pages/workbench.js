@@ -1,18 +1,32 @@
-import {DEFECTS, GRADES, ZONES} from '../labels.js';
+import {DEFECTS, GRADES, STATES, ZONES} from '../labels.js';
 import {auditList, channelInputs, channelName, empty, heading, lotLink, lotPicker, number, options, packLabel, readings, safe, sectionTitle, status, time} from '../ui.js';
 
+function blindPanel(data, decision, account) {
+  const {lot, blind} = data;
+  const progress = blind.phase === 'decided' ? `已定案 · 共 ${blind.votes.length} 票`
+    : blind.phase === 'arbitrating' ? '两票分歧 · 待第三位主管裁决'
+    : `已登记 ${blind.received} / ${blind.needed} 票`;
+  const mine = blind.my_vote && blind.phase !== 'decided' ? `<p class="notice">已登记你的${STATES[blind.my_vote.stage] || '盲审票'}：${safe(blind.my_vote.grade)} 级${blind.my_vote.rework_units ? ` · 返工 ${number(blind.my_vote.rework_units)} 件` : ''}。定案前不公开选择。</p>` : '';
+  const form = blind.can_vote && account.role === 'supervisor' ? `<form class="fields sign-form" data-action="blind/vote"><label>${blind.phase === 'arbitrating' ? '裁决等级' : '盲审等级'}<select name="grade" data-grade data-model="${decision.model_grade}">${options(GRADES, decision.model_grade)}</select></label><div class="grade-rule">改判或非 A 级会生成返工领料。定案前你的选择对其他主管保密。</div><div class="fields full" data-rework-fields ${decision.model_grade === 'A' ? 'hidden' : ''}><label>返工件数<input type="number" name="rework_units" min="1" max="${lot.units}" ${decision.model_grade === 'A' ? 'disabled' : 'required'}></label><label>判级理由<input name="reason" maxlength="300" ${decision.model_grade === 'A' ? 'disabled' : 'required'}></label></div><button class="primary full">${blind.phase === 'arbitrating' ? '提交裁决票' : '提交盲审票'}</button></form>` : '';
+  const waiting = !form && !mine && blind.phase !== 'decided' ? `<p class="muted">${account.role === 'supervisor' ? '等待其他主管登记盲审票。' : '盲审进行中，定案前仅可见进度。'}</p>` : '';
+  const votes = blind.phase === 'decided' && blind.votes ? `<div class="marks-list">${blind.votes.map(vote => `<article><div><b>${safe(vote.voter)}</b> <small>${STATES[vote.stage] || vote.stage}</small><b class="grade-inline">${safe(vote.grade)}</b></div><p>${vote.rework_units ? `返工 ${number(vote.rework_units)} 件` : '同判放行'}${vote.reason ? ` · ${safe(vote.reason)}` : ''}</p><small>${time(vote.created_at)}</small></article>`).join('')}</div>` : '';
+  return `${sectionTitle('双主管盲审', progress)}${mine}${form}${waiting}${votes}`;
+}
+
 function gradePanel(data, decision, account) {
-  const {lot} = data;
+  const {lot, blind} = data;
   if (!decision?.evidence) return `<section class="panel model">${sectionTitle('等级判别', 'PCA / LINEARSVC')}${decision?.state === 'queued' ? '<p class="notice">计算已入队。模型结果回写后，工作台会自动更新。</p>' : decision?.failure ? `<p class="notice warn">${safe(decision.failure)}</p>` : '<p class="muted">完整归档五个通道后，可提交模型判级。</p>'}</section>`;
   const {evidence} = decision;
   const scores = Object.entries(evidence.scores);
   const max = Math.max(...scores.map(([,score])=>Math.abs(score)), 0.01);
+  const waiting = decision.final_grade ? `人工签核 ${safe(decision.final_grade)} 级` : blind ? `${STATES[blind.phase]} · 已登记 ${blind.received}/${blind.needed} 票` : '等待质检主管签核';
   return `<section class="panel model">${sectionTitle('等级判别', 'PCA / LINEARSVC')}
-    <div class="featured-grade"><strong>${safe(decision.model_grade)}</strong><div><small>模型建议</small><h3>${GRADES[decision.model_grade]}</h3><p>${decision.final_grade ? `人工签核 ${safe(decision.final_grade)} 级` : '等待质检主管签核'}</p></div></div>
+    <div class="featured-grade"><strong>${safe(decision.model_grade)}</strong><div><small>模型建议</small><h3>${GRADES[decision.model_grade]}</h3><p>${waiting}</p></div></div>
     <div class="scores">${scores.map(([grade, score])=> `<div><span>${grade}</span><div class="score-track"><i class="${score < 0 ? 'negative' : 'positive'}" style="--width:${Math.abs(score)/max*48}%"></i></div><b>${score.toFixed(2)}</b></div>`).join('')}</div>
     <div class="model-caption">线性间隔分数 · 正负值表示超平面方向</div>
     <details class="model-proof"><summary>查看模型凭证</summary><dl><dt>模型版本</dt><dd>${safe(evidence.version)}</dd><dt>输入校验</dt><dd class="digest">${safe(decision.input_sha256)}</dd><dt>参考样本校验</dt><dd class="digest">${safe(evidence.reference_sha256)}</dd><dt>合成留出准确率</dt><dd>${(evidence.holdout_accuracy*100).toFixed(1)}% · ${evidence.holdout_rows} 条</dd><dt>主成分坐标</dt><dd>${evidence.components.map(value=>value.toFixed(2)).join(' / ')}</dd><dt>方差贡献率</dt><dd>${evidence.variance_ratio.map(value=>(value*100).toFixed(1)+'%').join(' / ')}</dd><dt>固定种子</dt><dd>${evidence.seed}</dd></dl></details>
     ${lot.state === 'review' && account.role === 'supervisor' ? `<form class="fields sign-form" data-action="grade/review"><label>签核等级<select name="grade" data-grade data-model="${decision.model_grade}">${options(GRADES, decision.model_grade)}</select></label><div class="grade-rule">改判或非 A 级会生成返工领料。</div><div class="fields full" data-rework-fields ${decision.model_grade === 'A' ? 'hidden' : ''}><label>返工件数<input type="number" name="rework_units" min="1" max="${lot.units}" ${decision.model_grade === 'A' ? 'disabled' : 'required'}></label><label>判级理由<input name="reason" maxlength="300" ${decision.model_grade === 'A' ? 'disabled' : 'required'}></label></div><button class="primary full">签核等级</button></form>` : ''}
+    ${blind ? blindPanel(data, decision, account) : ''}
     ${decision.reason ? `<p class="notice">${safe(decision.reason)}</p>` : ''}
   </section>`;
 }
@@ -23,7 +37,7 @@ export function workbenchPage(lots, data, account, zone) {
   const decision = decisions.find(item => item.measure_id === current?.id);
   const currentMarks = marks.filter(mark => mark.measure_id === current?.id);
   const canCapture = account.role === 'operator' && ['new','blocked','measured'].includes(lot.state);
-  const canMark = current && ['blocked','measured','review'].includes(lot.state);
+  const canMark = current && ['blocked','measured','review','blind'].includes(lot.state);
   return `${heading('包装线 / 视觉质检','判级工作台','核对检测通道，定位包装缺陷并签核模型等级。',lotPicker(lots,lot.id,'workbench'))}
     <div class="lot-strip"><div><small>包装批次</small><b>${safe(lot.code)}</b></div><div><small>产品</small><b>${safe(lot.product)}</b></div><div><small>检测机台 / 件数</small><b>${safe(lot.machine)} / ${number(lot.units)}</b></div>${status(lot.state)}${rework ? `<a data-nav href="${lotLink('rework',lot.id)}">查看返工单 →</a>` : ''}${lot.state === 'approved' && account.role === 'supervisor' ? '<button class="primary" data-action="close">关闭批次</button>' : ''}</div>
     <div class="workbench-grid"><div class="stack"><section class="panel specimen">${sectionTitle('包装定位', current ? `测量 v${current.revision}` : '待采样')}${packLabel(lot,currentMarks,zone)}<div class="zones" aria-label="选择包装视图">${Object.entries(ZONES).map(([key,label])=> `<button type="button" data-zone="${key}" aria-pressed="${key === zone}">${label}</button>`).join('')}</div><p class="sample-ref mono">${safe(current?.sample || '未归档样本')}</p></section>

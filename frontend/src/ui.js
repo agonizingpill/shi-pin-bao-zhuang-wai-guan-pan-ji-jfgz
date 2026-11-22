@@ -40,8 +40,9 @@ export function auditList(events) {
 }
 
 function auditNote(event) {
-  const {sample, revision, missing, exceeds, reason, note, model, final, quantity, sku} = event.details;
+  const {sample, revision, missing, exceeds, reason, note, model, final, quantity, sku, margin, stage, via} = event.details;
   return [sample && `${sample}${revision ? ` · v${revision}` : ''}`, model && `模型 ${model} → 人工 ${final}`,
     reason || note, quantity && `${sku} · ${number(quantity)} 件`, missing?.length && `缺失 ${missing.map(channelName).join('、')}`,
-    exceeds?.length && `超限 ${exceeds.map(channelName).join('、')}`].filter(Boolean).map(line => `<p>${safe(line)}</p>`).join('');
+    exceeds?.length && `超限 ${exceeds.map(channelName).join('、')}`, margin != null && `最高两档分差 ${number(margin)}`,
+    stage && STATES[stage], via && (via === 'arbitration' ? '第三位主管裁决定案' : '两票一致定案')].filter(Boolean).map(line => `<p>${safe(line)}</p>`).join('');
 }

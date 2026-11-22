@@ -1,13 +1,16 @@
 import json
 
 from src.auth import password_hash
+from src.blind import cast_vote
 from src.db import connect
 from src.disposition import close_lot, sign_grade
 from src.inspection import add_mark, capture, create_lot, enqueue, latest_grade, latest_measure, review_mark
 from src.queue import grade_next
 from src.schemas import CHANNELS, GradeReview, LotInput, MarkInput, MarkReview, MeasureInput
 
-STAFF = [('operator', '林珂 · 线边操作'), ('supervisor', '周遥 · 质检主管'), ('viewer', '顾宁 · 排产查看')]
+STAFF = [('operator', '林珂 · 线边操作', 'operator'), ('supervisor', '周遥 · 质检主管', 'supervisor'),
+         ('supervisor2', '沈惟 · 质检主管', 'supervisor'), ('supervisor3', '韩策 · 质检主管', 'supervisor'),
+         ('viewer', '顾宁 · 排产查看', 'viewer')]
 STOCK = [('FILM-MT-220', '哑光阻隔膜 · 220 mm', 'B-04', 620),
          ('FILM-GL-180', '高光印刷膜 · 180 mm', 'A-12', 360),
          ('FILM-KR-250', '牛皮复合膜 · 250 mm', 'C-09', 110)]
@@ -17,16 +20,17 @@ SAMPLES = [
     ('PK-261121-03', '伯爵茶曲奇 150 g', 'VS-01', 1800, 'FILM-MT-220', (1.61, None, 2.76, 0.24, 3.95), 'blocked'),
     ('PK-261121-04', '黑芝麻薄脆 80 g', 'VS-02', 2200, 'FILM-GL-180', (0.39, 0.42, 1.31, 0.22, 2.4), 'override'),
     ('PK-261121-05', '山椒豌豆 65 g', 'VS-02', 3200, 'FILM-GL-180', (1.79, 0.81, 2.83, 0.42, 5.3), 'review'),
+    ('PK-261121-06', '蜜桃乌龙酥 70 g', 'VS-03', 1400, 'FILM-KR-250', (1.12, 0.61, 2.25, 0.38, 1.62), 'blind'),
 ]
 
 
 def seed():
     with connect() as db:
         db.execute('SELECT pg_advisory_xact_lock(106501)')
-        for role, display in STAFF:
-            if not db.execute('SELECT 1 FROM staff WHERE username=%s', (role,)).fetchone():
+        for username, display, role in STAFF:
+            if not db.execute('SELECT 1 FROM staff WHERE username=%s', (username,)).fetchone():
                 db.execute('INSERT INTO staff VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING',
-                           (role, display, role, password_hash('PackDemo2026!')))
+                           (username, display, role, password_hash('PackDemo2026!')))
         for stock in STOCK:
             db.execute('INSERT INTO material_stock VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING', stock)
         for code, product, machine, units, film_sku, values, target in SAMPLES:
@@ -49,6 +53,11 @@ def seed():
             grade_next(db, lot_id)
             if target == 'review':
                 continue
+            if target == 'blind':
+                # 模型最高两档分差 0.19，进入盲审；第一位主管已独立登记一票
+                cast_vote(db, lot_id, GradeReview(grade='B', reason='封口至袋身过渡区有连续暗纹，建议换膜返工。',
+                                                  rework_units=90), 'supervisor')
+                continue
             current = latest_measure(db, lot_id)
             decision = latest_grade(db, current['id'])
             if decision['model_grade'] != 'A':
@@ -59,7 +68,8 @@ def seed():
             else:
                 sign_grade(db, lot_id, GradeReview(grade='B', reason='实物热封带折入膜层，抽检区段需重新换膜。',
                                                  rework_units=160), 'supervisor')
-        tables = ('staff', 'material_stock', 'pack_lot', 'visual_measure', 'defect_mark', 'grade_decision', 'rework_issue', 'audit_event')
+        tables = ('staff', 'material_stock', 'pack_lot', 'visual_measure', 'defect_mark', 'grade_decision',
+                  'blind_vote', 'rework_issue', 'audit_event')
         print(json.dumps({table: db.execute(f'SELECT count(*) AS n FROM {table}').fetchone()['n'] for table in tables}, sort_keys=True))
 
 

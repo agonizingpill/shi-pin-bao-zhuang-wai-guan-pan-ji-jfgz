@@ -9,14 +9,17 @@ from redis import Redis
 
 from .inspection import audit, set_state
 from .model import input_digest, predict
+from .schemas import BLIND_REVIEW_MARGIN
 
 logger = logging.getLogger(__name__)
 redis = Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'), socket_timeout=4)
 WAKE_QUEUE = 'pouch:grade-wake'
+EVIDENCE_DIR = Path(os.getenv('MODEL_EVIDENCE_DIR', '/model-evidence'))
 
 
 def store_receipt(decision_id, digest, grade, evidence):
-    path = Path('/model-evidence')
+    path = EVIDENCE_DIR
+    path.mkdir(parents=True, exist_ok=True)
     record = {'decision_id': decision_id, 'input_sha256': digest, 'model_grade': grade, **evidence}
     with NamedTemporaryFile(mode='w', dir=path, delete=False) as output:
         temporary = Path(output.name)
@@ -54,8 +57,19 @@ def grade_next(db, lot_id=None):
         set_state(db, lot, 'measured')
         audit(db, lot['id'], pending['requested_by'], 'grade_failed', decision_id=decision_id)
     else:
-        db.execute("UPDATE grade_decision SET state='predicted',model_grade=%s,evidence=%s,computed_at=now() WHERE id=%s",
-                   (grade, Jsonb(evidence), decision_id))
-        set_state(db, lot, 'review')
-        audit(db, lot['id'], pending['requested_by'], 'model_predicted', decision_id=decision_id, grade=grade)
+        top = sorted(evidence['scores'].values(), reverse=True)
+        margin = top[0] - top[1]
+        if margin < BLIND_REVIEW_MARGIN:
+            # 最高两档过于接近：改走双主管盲审，暂不开放单人签核
+            db.execute("UPDATE grade_decision SET state='blind',model_grade=%s,evidence=%s,computed_at=now() WHERE id=%s",
+                       (grade, Jsonb(evidence), decision_id))
+            set_state(db, lot, 'blind')
+            audit(db, lot['id'], pending['requested_by'], 'model_predicted', decision_id=decision_id, grade=grade)
+            audit(db, lot['id'], pending['requested_by'], 'blind_review_opened', decision_id=decision_id,
+                  margin=round(margin, 4))
+        else:
+            db.execute("UPDATE grade_decision SET state='predicted',model_grade=%s,evidence=%s,computed_at=now() WHERE id=%s",
+                       (grade, Jsonb(evidence), decision_id))
+            set_state(db, lot, 'review')
+            audit(db, lot['id'], pending['requested_by'], 'model_predicted', decision_id=decision_id, grade=grade)
     return True

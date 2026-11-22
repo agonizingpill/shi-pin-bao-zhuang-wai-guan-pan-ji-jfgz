@@ -20,5 +20,5 @@ export function reworkPage(lots, data, account) {
       ${r.state === 'issued' && account.role !== 'supervisor' ? '<p class="notice">等待质检主管签核换膜复测。</p>' : ''}
       ${r.state === 'verified' ? `<p class="notice">${safe(r.verification_note)} · ${safe(r.verified_by)} ${time(r.verified_at)}</p>${readings(data.measures.find(item=>item.id===r.verification_id),data.verification_limits)}` : ''}
       ${lot.state === 'approved' && account.role === 'supervisor' ? '<button class="primary" data-action="close">关闭批次</button>' : ''}
-    </section><section class="panel trace">${sectionTitle('返工履历')}${auditList(data.events.filter(item=>['grade_signed','rework_requested','material_issued','rework_retest_rejected','rework_verified','lot_closed'].includes(item.action)))}</section></div></div>`}`;
+    </section><section class="panel trace">${sectionTitle('返工履历')}${auditList(data.events.filter(item=>['grade_signed','blind_review_decided','rework_requested','material_issued','rework_retest_rejected','rework_verified','lot_closed'].includes(item.action)))}</section></div></div>`}`;
 }

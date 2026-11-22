@@ -10,12 +10,12 @@ from psycopg import errors
 from redis.exceptions import RedisError
 
 from .operations_evidence import router as operations_evidence
-from . import disposition, inspection
+from . import blind, disposition, inspection
 from .auth import identity, issue_token, password_matches, require
 from .db import connect
 from .queue import WAKE_QUEUE, redis
-from .schemas import (VERIFICATION_LIMITS, GradeReview, Login, LotInput, MarkInput, MarkReview,
-                      MeasureInput, Role, Verification)
+from .schemas import (BLIND_REVIEW_MARGIN, VERIFICATION_LIMITS, GradeReview, Login, LotInput, MarkInput,
+                      MarkReview, MeasureInput, Role, Verification)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('packaging')
@@ -94,10 +94,11 @@ def materials(_=Depends(identity)):
 
 
 @app.get('/lots/{lot_id}')
-def detail(lot_id: int, _=Depends(identity)):
+def detail(lot_id: int, user=Depends(identity)):
     with connect() as db:
         db.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-        return {**inspection.lot_detail(db, lot_id), 'verification_limits': VERIFICATION_LIMITS}
+        return {**inspection.lot_detail(db, lot_id), 'verification_limits': VERIFICATION_LIMITS,
+                'blind_margin': BLIND_REVIEW_MARGIN, 'blind': blind.status(db, lot_id, user['username'])}
 
 
 @app.post('/lots', status_code=201)
@@ -139,6 +140,12 @@ def grade(lot_id: int, actor=Depends(operator)):
 def review(lot_id: int, data: GradeReview, actor=Depends(supervisor)):
     with connect() as db:
         return disposition.sign_grade(db, lot_id, data, actor)
+
+
+@app.post('/lots/{lot_id}/blind/vote')
+def blind_vote(lot_id: int, data: GradeReview, actor=Depends(supervisor)):
+    with connect() as db:
+        return blind.cast_vote(db, lot_id, data, actor)
 
 
 @app.post('/lots/{lot_id}/rework/issue')
